@@ -1,0 +1,196 @@
+/**
+ * @file main.c
+ * @brief Main entry point for the Todo application.
+ *
+ * This application allows users to manage a list of tasks with various functionalities,
+ * including adding, deleting, editing tasks, marking tasks as complete, sorting, searching,
+ * and undoing actions. It uses ncurses for a text-based user interface and supports features
+ * such as asynchronous saving, input validation, enhanced UI with color coding, and logging.
+ *
+ * Features Implemented:
+ * - Update Task IDs After Deletion and Sorting
+ * - Improved Input Validation
+ * - Enhanced User Interface
+ * - Implement Undo Functionality
+ * - Add Help Menu
+ * - Optimize Data Structures
+ * - Implement Asynchronous Saving
+ * - Handle Empty Task Lists Gracefully
+ * - Improve Code Documentation
+ * - Implement Logging
+ * - Ensure Thread Safety
+ * - Error Handling and User Feedback
+ *
+ * Controls:
+ * - 'j'/'k' to navigate tasks
+ * - 'a' to add a new task
+ * - 'd' to delete the selected task
+ * - 'e' to edit the selected task
+ * - 'c' to toggle completion status
+ * - 's' to search for a task
+ * - 'P' to sort tasks by priority
+ * - 'S' to sort tasks by due date
+ * - 'u' to undo the last action
+ * - 'h' to show the help menu
+ * - 'q' to quit the application
+ *
+ * @author 
+ * @date 
+ */
+
+#include <ncurses.h>
+#include <stdlib.h>
+#include <string.h>
+#include <stdbool.h>
+#include <pthread.h>
+#include "todo.h"
+
+#define ACTIONS_BEFORE_AUTOSAVE 5
+
+Task *tasks = NULL;          // Dynamic array of tasks
+int task_count = 0;          // Number of tasks
+int task_capacity = 0;       // Capacity of the tasks array
+int selected_task = 0;       // Index of the currently selected task
+
+// Booleans to track sort order
+bool priority_ascending = true;  // Start with highest to lowest priority
+bool date_ascending = true;      // Start with closest to latest due date
+
+// Action stack for undo functionality
+Action action_stack[MAX_ACTIONS];
+int action_count = 0;
+
+// Mutex for thread safety
+pthread_mutex_t task_mutex = PTHREAD_MUTEX_INITIALIZER;
+
+// Counter for autosave
+int action_counter = 0;
+
+// Function to clear input prompt after getting the input
+void get_input_and_clear(char *buffer, int size, const char *prompt) {
+    mvprintw(LINES - 2, 0, "%s", prompt);
+    clrtoeol();  // Clears the prompt area before input to avoid overlay
+    echo();
+    getnstr(buffer, size - 1);  // Get user input
+    noecho();
+    buffer[size - 1] = '\0';  // Null-terminate the string
+    clear();  // Clear the entire screen after each input
+    refresh();
+}
+
+void delete_task_interactive() {
+    mvprintw(LINES - 2, 0, "Are you sure you want to delete this task? (y/n): ");
+    clrtoeol();
+    refresh();
+    int ch = getch();
+    if (ch == 'y' || ch == 'Y') {
+        pthread_mutex_lock(&task_mutex);
+        // Push the action onto the stack before deletion
+        if (action_count < MAX_ACTIONS) {
+            action_stack[action_count].type = ACTION_DELETE;
+            action_stack[action_count].task = tasks[selected_task];
+            action_stack[action_count].index = selected_task;
+            action_count++;
+        }
+        remove_task(&tasks, &task_count, selected_task);
+        update_task_ids(tasks, task_count);
+        pthread_mutex_unlock(&task_mutex);
+        if (selected_task >= task_count && task_count > 0) selected_task = task_count - 1;
+        log_message("Task deleted.");
+        action_counter++;
+        if (action_counter >= ACTIONS_BEFORE_AUTOSAVE) {
+            trigger_save_tasks(tasks, task_count);
+            action_counter = 0;
+        }
+    }
+    clear();
+}
+
+int main() {
+    init_ncurses();
+    printf("Ncurses initialized hopefully");
+    load_tasks(&tasks, &task_count, &task_capacity);
+    printf("Tasks Loaded hopefully");
+    display_tasks(tasks, task_count, selected_task);  // Initial display
+    printf("On god it isnt working");
+    int ch;
+    while ((ch = getch()) != 'q') {
+        pthread_mutex_lock(&task_mutex);
+        switch (ch) {
+            case 'j':
+                if (selected_task < task_count - 1) selected_task++;
+                break;
+            case 'k':
+                if (selected_task > 0) selected_task--;
+                break;
+            case 'a':
+                add_task(&tasks, &task_count, &task_capacity, "", "", "", RECURRENCE_NONE, 0);
+                update_task_ids(tasks, task_count);
+                action_counter++;
+                if (action_counter >= ACTIONS_BEFORE_AUTOSAVE) {
+                    trigger_save_tasks(tasks, task_count);
+                    action_counter = 0;
+                }
+                break;
+            case 'd':
+                if (task_count > 0) {
+                    delete_task_interactive();
+                } else {
+                    mvprintw(LINES - 2, 0, "No tasks to delete. Press any key...");
+                    refresh();
+                    getch();
+                }
+                break;
+            case 'c':
+                if (task_count > 0) {
+                    toggle_task_completion(&tasks[selected_task]);
+                    action_counter++;
+                    if (action_counter >= ACTIONS_BEFORE_AUTOSAVE) {
+                        trigger_save_tasks(tasks, task_count);
+                        action_counter = 0;
+                    }
+                }
+                break;
+            case 'e':
+                if (task_count > 0) {
+                    edit_task(&tasks[selected_task]);
+                    action_counter++;
+                    if (action_counter >= ACTIONS_BEFORE_AUTOSAVE) {
+                        trigger_save_tasks(tasks, task_count);
+                        action_counter = 0;
+                    }
+                }
+                break;
+            case 's':  // Search functionality
+                search_task(tasks, task_count, &selected_task);
+                break;
+            case 'P':  // Toggle priority sorting
+                sort_tasks(tasks, task_count, 'p', priority_ascending);
+                update_task_ids(tasks, task_count);
+                priority_ascending = !priority_ascending;  // Toggle the boolean
+                selected_task = 0;  // Reset selection to the first task after sorting
+                break;
+            case 'S':  // Toggle due date sorting
+                sort_tasks(tasks, task_count, 'd', date_ascending);
+                update_task_ids(tasks, task_count);
+                date_ascending = !date_ascending;  // Toggle the boolean
+                selected_task = 0;  // Reset selection to the first task after sorting
+                break;
+            case 'u':
+                undo_last_action(&tasks, &task_count, &task_capacity);
+                update_task_ids(tasks, task_count);
+                break;
+            case 'h':
+                show_help();
+                break;
+        }
+        pthread_mutex_unlock(&task_mutex);
+        display_tasks(tasks, task_count, selected_task);
+    }
+
+    trigger_save_tasks(tasks, task_count);  // Ensure tasks are saved before exiting
+    cleanup_ncurses();
+    free(tasks);  // Free dynamically allocated tasks array
+    return 0;
+}
+
