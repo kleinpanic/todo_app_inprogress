@@ -65,8 +65,8 @@ sudo pacman -S base-devel ncurses
 1. **Clone the Repository**
 
    ```bash
-   git clone https://github.com/kleinpanic/todo-cli.git
-   git clone git@github.com:kleinpanic/todo-cli.git 
+   git clone https://github.com/kleinpanic/todo_task_manager.git
+   git clone git@github.com:kleinpanic/todo_task_manager.git
    cd todo-cli
    ```
 
