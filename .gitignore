@@ -1,0 +1,4 @@
+build/binary/
+obj/
+data/
+src/backups/
