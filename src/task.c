@@ -450,36 +450,68 @@ void search_task(Task *tasks, int count, int *selected_task) {
     getch();  // Wait for user to acknowledge
 }
 
-
 void load_tasks(Task **tasks, int *count, int *capacity) {
     char *file_path = get_database_path();
     FILE *file = fopen(file_path, "r");
 
+    if (file == NULL) {
+        handle_error("Tasks file not found. Starting with an empty task list.");
+        *capacity = 10;
+        *tasks = malloc((*capacity) * sizeof(Task));
+        if (*tasks == NULL) {
+            handle_error("Error allocating memory for tasks.");
+            exit(1);
+        }
+        *count = 0;
+        return;
+    }
+
     *capacity = 10;
+    *count = 0;
     *tasks = malloc((*capacity) * sizeof(Task));
     if (*tasks == NULL) {
         handle_error("Error allocating memory for tasks.");
         exit(1);
     }
 
-    if (file == NULL) {
-        handle_error("Tasks file not found. Starting with an empty task list.");
-        return;
-    }
+    char line[1024];  // Buffer to hold each line from the file
 
-    while (!feof(file)) {
+    while (fgets(line, sizeof(line), file) != NULL) {
         ensure_capacity(tasks, capacity, *count + 1);
         Task *task = &(*tasks)[*count];
-        char recurrence_str[MAX_RECURRENCE_LEN];
-        if (fscanf(file, "%d\t%[^\t]\t%[^\t]\t%d\t%d\t%s\t%s\n", 
-                   &task->id, task->title, task->category,
-                   &task->priority, &task->completed,
-                   task->due_date, recurrence_str) == 7) {
+
+        // Initialize fields to safe defaults
+        memset(task, 0, sizeof(Task));
+        task->recurrence = RECURRENCE_NONE;
+        strncpy(task->due_date, "N/A", MAX_DATE_LEN - 1);
+        task->due_date[MAX_DATE_LEN - 1] = '\0';
+
+        char recurrence_str[MAX_RECURRENCE_LEN] = "none";
+
+        // Parse the line using sscanf
+        int fields_read = sscanf(line, "%d\t%255[^\t]\t%49[^\t]\t%d\t%d\t%11[^\t]\t%9[^\n]",
+                                 &task->id, task->title, task->category,
+                                 &task->priority, &task->completed,
+                                 task->due_date, recurrence_str);
+
+        if (fields_read >= 6) {
+            // If recurrence was not read, default to "none"
+            if (fields_read == 6) {
+                strncpy(recurrence_str, "none", MAX_RECURRENCE_LEN - 1);
+                recurrence_str[MAX_RECURRENCE_LEN - 1] = '\0';
+            }
+            // Ensure strings are null-terminated
+            task->title[MAX_TITLE_LEN - 1] = '\0';
+            task->category[MAX_CATEGORY_LEN - 1] = '\0';
+            task->due_date[MAX_DATE_LEN - 1] = '\0';
+            recurrence_str[MAX_RECURRENCE_LEN - 1] = '\0';
+
+            // Parse the recurrence string
             task->recurrence = parse_recurrence(recurrence_str);
             (*count)++;
         } else {
-            // Skip malformed lines
-            fscanf(file, "%*[^\n]\n");
+            // Handle malformed lines
+            handle_error("Warning: Skipping malformed line in tasks file.");
         }
     }
 
@@ -501,28 +533,36 @@ void *save_tasks_async(void *arg) {
     return NULL;
 }
 
-void trigger_save_tasks(Task *tasks, int count) {
-    pthread_t save_thread;
-    SaveArgs *args = malloc(sizeof(SaveArgs));
-    if (args == NULL) {
-        handle_error("Error allocating memory for saving tasks.");
-        return;
-    }
-    args->tasks = malloc(count * sizeof(Task));
-    if (args->tasks == NULL) {
-        handle_error("Error allocating memory for saving tasks.");
-        free(args);
-        return;
-    }
-    memcpy(args->tasks, tasks, count * sizeof(Task));
-    args->count = count;
-
-    if (pthread_create(&save_thread, NULL, save_tasks_async, args) != 0) {
-        handle_error("Error creating thread for saving tasks.");
-        free(args->tasks);
-        free(args);
+void trigger_save_tasks(Task *tasks, int count, bool synchronous) {
+    if (synchronous) {
+        // Perform a synchronous save
+        pthread_mutex_lock(&task_mutex);
+        save_tasks(tasks, count);
+        pthread_mutex_unlock(&task_mutex);
     } else {
-        pthread_detach(save_thread);
+        // Perform an asynchronous save
+        pthread_t save_thread;
+        SaveArgs *args = malloc(sizeof(SaveArgs));
+        if (args == NULL) {
+            handle_error("Error allocating memory for saving tasks.");
+            return;
+        }
+        args->tasks = malloc(count * sizeof(Task));
+        if (args->tasks == NULL) {
+            handle_error("Error allocating memory for saving tasks.");
+            free(args);
+            return;
+        }
+        memcpy(args->tasks, tasks, count * sizeof(Task));
+        args->count = count;
+
+        if (pthread_create(&save_thread, NULL, save_tasks_async, args) != 0) {
+            handle_error("Error creating thread for saving tasks.");
+            free(args->tasks);
+            free(args);
+        } else {
+            pthread_detach(save_thread);
+        }
     }
 }
 
@@ -553,38 +593,33 @@ void display_tasks(Task *tasks, int count, int selected) {
         return;
     }
 
-    // Add headers
-    mvprintw(0, 0, "ID  Title               Category        Priority  Due Date    Recurrence  Status");
-    mvhline(1, 0, '-', COLS);
-
     for (int i = 0; i < count; i++) {
-        int line = i + 2;
-
-        if (line >= LINES - 2) {
-            break;  // Prevent writing beyond the screen
-        }
-
         if (i == selected) {
             attron(A_REVERSE);
         }
+
         if (is_task_overdue(tasks[i])) {
             attron(COLOR_PAIR(1));  // Red for overdue tasks
         } else if (is_task_due_soon(tasks[i])) {
             attron(COLOR_PAIR(2));  // Yellow for due soon tasks
         }
 
-        // Set color based on priority
+        // Optionally set color based on priority
+        // If you prefer not to have the green theme, you can comment out the priority-based coloring
+        /*
         int priority_color = tasks[i].priority + 2;  // Map priority 1-5 to color pairs 3-7
         attron(COLOR_PAIR(priority_color));
+        */
 
-        char status[10];
-        snprintf(status, sizeof(status), "%s", tasks[i].completed ? "Done" : "Pending");
+        // Display completion status with [ ] or [X]
+        mvprintw(i, 0, "[%c] %s (%s) Priority: %d Due: %s Recurrence: %s", 
+                 tasks[i].completed ? 'X' : ' ', tasks[i].title,
+                 tasks[i].category, tasks[i].priority, tasks[i].due_date, recurrence_strings[tasks[i].recurrence]);
 
-        mvprintw(line, 0, "%-3d %-18s %-15s %-9d %-11s %-11s %-8s", 
-                 tasks[i].id, tasks[i].title,
-                 tasks[i].category, tasks[i].priority, tasks[i].due_date, recurrence_strings[tasks[i].recurrence], status);
-
+        // Turn off priority color if used
+        /*
         attroff(COLOR_PAIR(priority_color));
+        */
 
         if (is_task_overdue(tasks[i])) {
             attroff(COLOR_PAIR(1));  // Turn off overdue color
@@ -596,7 +631,8 @@ void display_tasks(Task *tasks, int count, int selected) {
             attroff(A_REVERSE);
         }
     }
-    mvprintw(LINES - 2, 0, "Press 'h' for help.");
+
+    mvprintw(count + 1, 0, "Press 'h' for help.");
     refresh();
 }
 
@@ -616,7 +652,8 @@ RecurrenceType parse_recurrence(const char *str) {
             return (RecurrenceType)i;
         }
     }
-    return -1;
+    // Return RECURRENCE_NONE instead of -1
+    return RECURRENCE_NONE;
 }
 
 void undo_last_action(Task **tasks, int *count, int *capacity) {

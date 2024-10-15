@@ -86,7 +86,7 @@ void show_help();
 void ensure_capacity(Task **tasks, int *capacity, int needed);
 void undo_last_action(Task **tasks, int *count, int *capacity);
 void log_message(const char *message);
-void trigger_save_tasks(Task *tasks, int count);
+void trigger_save_tasks(Task *tasks, int count, bool synchronous);
 void *save_tasks_async(void *arg);
 void handle_error(const char *message);
 void update_task_ids(Task *tasks, int count);

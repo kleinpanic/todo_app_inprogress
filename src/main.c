@@ -38,19 +38,19 @@ void get_input_and_clear(char *buffer, int size, const char *prompt) {
     refresh();
 }
 
-// Function to delete a task interactively with added safety checks
 void delete_task_interactive() {
     mvprintw(LINES - 2, 0, "Are you sure you want to delete this task? (y/n): ");
     clrtoeol();
     refresh();
     int ch = getch();
-    
+
     if (ch == 'y' || ch == 'Y') {
-        pthread_mutex_lock(&task_mutex);
+        // Remove the mutex lock here
+        // pthread_mutex_lock(&task_mutex);
 
         // Check if selected_task index is within valid bounds
         if (selected_task < 0 || selected_task >= task_count) {
-            pthread_mutex_unlock(&task_mutex);
+            // pthread_mutex_unlock(&task_mutex);
             mvprintw(LINES - 2, 0, "Error: Invalid task selected. Press any key...");
             refresh();
             getch();
@@ -68,7 +68,8 @@ void delete_task_interactive() {
         remove_task(&tasks, &task_count, selected_task);
         update_task_ids(tasks, task_count);
 
-        pthread_mutex_unlock(&task_mutex);
+        // Remove the mutex unlock here
+        // pthread_mutex_unlock(&task_mutex);
 
         if (selected_task >= task_count && task_count > 0) {
             selected_task = task_count - 1;
@@ -78,7 +79,7 @@ void delete_task_interactive() {
         action_counter++;
 
         if (action_counter >= ACTIONS_BEFORE_AUTOSAVE) {
-            trigger_save_tasks(tasks, task_count);
+            trigger_save_tasks(tasks, task_count, false);
             action_counter = 0;
         }
     }
@@ -115,13 +116,18 @@ int main() {
                 update_task_ids(tasks, task_count);
                 action_counter++;
                 if (action_counter >= ACTIONS_BEFORE_AUTOSAVE) {
-                    trigger_save_tasks(tasks, task_count);
+                    trigger_save_tasks(tasks, task_count, false);  // Asynchronous save
                     action_counter = 0;
                 }
                 break;
             case 'd':
                 if (task_count > 0) {
                     delete_task_interactive();
+                    action_counter++;
+                    if (action_counter >= ACTIONS_BEFORE_AUTOSAVE) {
+                        trigger_save_tasks(tasks, task_count, false);  // Asynchronous save
+                        action_counter = 0;
+                    }
                 } else {
                     mvprintw(LINES - 2, 0, "No tasks to delete. Press any key...");
                     refresh();
@@ -133,7 +139,7 @@ int main() {
                     toggle_task_completion(&tasks[selected_task]);
                     action_counter++;
                     if (action_counter >= ACTIONS_BEFORE_AUTOSAVE) {
-                        trigger_save_tasks(tasks, task_count);
+                        trigger_save_tasks(tasks, task_count, false);  // Asynchronous save
                         action_counter = 0;
                     }
                 }
@@ -143,7 +149,7 @@ int main() {
                     edit_task(&tasks[selected_task]);
                     action_counter++;
                     if (action_counter >= ACTIONS_BEFORE_AUTOSAVE) {
-                        trigger_save_tasks(tasks, task_count);
+                        trigger_save_tasks(tasks, task_count, false);  // Asynchronous save
                         action_counter = 0;
                     }
                 }
@@ -166,6 +172,11 @@ int main() {
             case 'u':
                 undo_last_action(&tasks, &task_count, &task_capacity);
                 update_task_ids(tasks, task_count);
+                action_counter++;
+                if (action_counter >= ACTIONS_BEFORE_AUTOSAVE) {
+                    trigger_save_tasks(tasks, task_count, false);  // Asynchronous save
+                    action_counter = 0;
+                }
                 break;
             case 'h':
                 show_help();
@@ -186,7 +197,7 @@ int main() {
     }
 
     // Save tasks and clean up before exiting
-    trigger_save_tasks(tasks, task_count);
+    trigger_save_tasks(tasks, task_count, true);  // Synchronous save
     cleanup_ncurses();
     free(tasks);  // Free dynamically allocated tasks array
     return 0;
