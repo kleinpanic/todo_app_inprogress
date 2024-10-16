@@ -66,8 +66,7 @@ sudo pacman -S base-devel ncurses
 
    ```bash
    git clone https://github.com/kleinpanic/todo_task_manager.git
-   git clone git@github.com:kleinpanic/todo_task_manager.git
-   cd todo-cli
+   cd todo_task_manager
    ```
 
 2. **Build the Application**
